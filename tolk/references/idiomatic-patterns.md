@@ -1,11 +1,10 @@
 # Idiomatic Tolk Contract Patterns
 
-Use this reference for implementing or reviewing Tolk 1.5 contract code. Examples are independent patterns; adapt their types and state transitions to the actual contract. For version-sensitive changes, read [language and migration](language-and-migration.md).
+Use this reference for implementing or reviewing Tolk contract code.
 
 ## Table of Contents
 
 - Project layout
-- Contract directive and ABI
 - Storage
 - Message schemas
 - Internal messages
@@ -19,7 +18,7 @@ Use this reference for implementing or reviewing Tolk 1.5 contract code. Example
 
 ## Project Layout
 
-Follow the existing project layout. For a new multi-file contract, a small set of focused files is usually sufficient:
+Prefer a small set of focused files:
 
 - `contracts/errors.tolk`: error constants or enums.
 - `contracts/messages.tolk`: incoming and outgoing message structs, opcodes, payload aliases, and union types.
@@ -28,20 +27,7 @@ Follow the existing project layout. For a new multi-file contract, a small set o
 - `tests/*`: integration tests and helper wrappers according to the project's framework.
 - `scripts/*`: deployment or operational flows if the project already uses scripts.
 
-Keep shared schemas easy to import. Current Tolk also permits importing another contract’s types while its entrypoints/getters stay local to its defining file; do not assume that importing a declared contract necessarily duplicates reserved entrypoints.
-
-## Contract Directive and ABI
-
-Declare the public shape for tooling in the contract entrypoint file:
-
-```tolk
-contract Counter {
-    storage: Storage
-    incomingMessages: AllowedMessage
-}
-```
-
-`incomingExternal`, `outgoingMessages`, `emittedEvents`, `thrownErrors`, and `storageAtDeployment` describe other public surfaces when relevant. Declared get methods are exported. Use `forceAbiExport` for additional types needed by tooling, then inspect actual ABI and generated bindings. A directive describes types; it does not implement message dispatch, authorization, storage initialization, or contract invariants. A source file can have only one contract directive.
+Keep shared message/storage types importable without importing an entrypoint file. This avoids duplicate reserved entrypoint definitions in tests, wrappers, or multi-contract projects.
 
 ## Storage
 
@@ -63,7 +49,7 @@ fun Storage.save(self) {
 }
 ```
 
-Use `lazy Storage.load()` when only a subset of fields is needed. Lazy reads load fields on demand and do not prove that every field or trailing bit was validated:
+Use `lazy Storage.load()` when only a subset of fields is needed:
 
 ```tolk
 get fun currentOwner(): address {
@@ -118,12 +104,12 @@ Represent message bodies as structs. Use 32-bit prefixes for opcode-bearing mess
 ```tolk
 struct (0x12345678) Increment {
     queryId: uint64
-    amount: coins
+    amount: uint32
 }
 
 struct (0x23456789) Reset {
     queryId: uint64
-    value: coins
+    value: uint32
 }
 
 type AllowedMessage = Increment | Reset
@@ -139,12 +125,12 @@ Use the narrowest correct types:
 - `RemainingBitsAndRefs` when the schema includes "the rest of the slice".
 - Fixed-width `intN`/`uintN` or `coins` inside serialized structs, not unbounded `int`.
 
-Use custom serializers for domain encodings that do not fit built-in types. In 1.5, an alias-owned serializer is selected for that alias, not for every value of the underlying type:
+Use custom serializers for domain encodings that do not fit built-in types:
 
 ```tolk
 type MetadataTail = slice
 
-fun MetadataTail.unpackFromSlice(mutate s: slice): MetadataTail {
+fun MetadataTail.unpackFromSlice(mutate s: slice) {
     val rest = s;
     s = createEmptySlice();
     return rest
@@ -160,8 +146,6 @@ fun MetadataTail.packToBuilder(self, mutate b: builder) {
 Use `InMessage`, lazy union parsing, and `match`:
 
 ```tolk
-const ERR_NOT_OWNER = 401
-
 fun onInternalMessage(in: InMessage) {
     val msg = lazy AllowedMessage.fromSlice(in.body);
 
@@ -175,7 +159,7 @@ fun onInternalMessage(in: InMessage) {
         Reset => {
             var storage = lazy Storage.load();
             assert (in.senderAddress == storage.ownerAddress) throw ERR_NOT_OWNER;
-            storage.balance = msg.value;
+            storage.balance = msg.value as coins;
             storage.save();
         }
         else => {
@@ -189,83 +173,54 @@ Choose the unknown-message policy deliberately. Empty internal messages are comm
 
 ## Bounced Messages
 
-Use `onBouncedMessage` for bounce-specific recovery. A body prefix alone does not turn an ordinary message into a bounce. Match the parser to the original outgoing bounce mode.
-
-For `BounceMode.Only256BitsOfBody`, only a prefix of the original body is available, with no original refs. Put recovery identifiers/amounts early enough to fit; do not try to deserialize an entire original message containing addresses or refs.
+Use `onBouncedMessage` for bounce-specific state repair:
 
 ```tolk
-struct (0x34567890) TransferOut {
-    queryId: uint64
-    amount: coins
-}
+type BounceableMessage = TransferOut | MintOut
 
 fun onBouncedMessage(in: InMessageBounced) {
     in.bouncedBody.skipBouncedPrefix();
-    val msg = lazy TransferOut.fromSlice(in.bouncedBody);
-    val queryId = msg.queryId;
-    val amount = msg.amount;
-    // Correlate queryId and in.senderAddress with pending state.
-    // Apply the matching state repair once, not a blind credit from amount.
+    val msg = lazy BounceableMessage.fromSlice(in.bouncedBody);
+
+    match (msg) {
+        TransferOut => {
+            var storage = lazy Storage.load();
+            storage.balance += msg.amount;
+            storage.save();
+        }
+        else => {}
+    }
 }
 ```
 
-This example only parses the recoverable fields; the comments stand for application-specific state repair. For rich bounces, parse the rich wrapper instead of skipping the legacy prefix:
+Pick one bounce mode family where possible:
 
-```tolk
-fun originalRichBody(bouncedBody: slice): cell {
-    val rich = lazy RichBounceBody.fromSlice(bouncedBody);
-    return rich.originalBody;
-}
-```
-
-`RichBounceBody` has prefix `0xfffffffe`, original body/info, phase, exit code, and optional compute details. `RichBounceOnlyRootCell` omits the original body's refs. Full `RichBounce` retains richer recovery data but costs more. `NoBounce` gives no bounce-based recovery. If several bounce families are possible, dispatch explicitly rather than applying one parser to all of them.
+- `BounceMode.NoBounce` for messages that should not return on failure.
+- `BounceMode.Only256BitsOfBody` for low-cost bounce recovery when the needed fields fit.
+- `BounceMode.RichBounce` or `RichBounceOnlyRootCell` when recovery needs richer failure data.
 
 ## External Messages
 
-Validate the signed schema, destination/domain, expiration, signature, and replay state before accepting external gas when invalid requests should be rejected without charging contract gas. The signature must cover the exact intended payload, including refs.
+External messages originate off-chain and have limited initial gas. Validate signatures, expiration, replay state, and message shape before accepting external gas:
 
 ```tolk
 import "@stdlib/gas-payments"
 
-struct ExternalStorage {
-    publicKey: uint256
-    domain: uint32
-    seqno: uint32
-}
-
-struct SignedPayload {
-    destination: address
-    domain: uint32
-    validUntil: uint32
-    seqno: uint32
-}
-
-struct SignedRequest {
-    signature: bits512
-    payload: SignedPayload
-}
-
 fun onExternalMessage(inMsg: slice) {
-    val request = SignedRequest.fromSlice(inMsg);
-    var storage = ExternalStorage.fromCell(contract.getData());
-    assert (request.payload.destination == contract.getAddress()) throw 100;
-    assert (request.payload.domain == storage.domain) throw 101;
-    assert (request.payload.validUntil > blockchain.now()) throw 102;
-    assert (request.payload.seqno == storage.seqno) throw 103;
+    val request = lazy SignedRequest.fromSlice(inMsg);
+    assert (request.validUntil > blockchain.now()) throw ERR_EXPIRED;
+    assert (checkSignature(request)) throw ERR_BAD_SIGNATURE;
 
-    var signedBody = inMsg;
-    signedBody.skipBits(512);
-    assert (isSignatureValid(signedBody.hash(), request.signature as slice, storage.publicKey)) throw 104;
+    var storage = lazy Storage.load();
+    assert (request.seqno == storage.seqno) throw ERR_INVALID_SEQNO;
     acceptExternalMessage();
 
     storage.seqno += 1;
-    contract.setData(storage.toCell());
+    storage.save();
 }
 ```
 
-Here the signer hashes the payload cell, excluding the leading signature. This is one example schema, not the wire format of a standard wallet. Select domain values according to the protocol; never refactor a deployed signed format without hash/signature vectors.
-
-For flows with outbound actions, specify when replay state is persisted or committed and what should survive action failure. Do not add `commit()` mechanically: wallet versions and application recovery rules can differ.
+For replay-sensitive flows, persist replay state before sending outbound actions when the design requires it.
 
 ## Outgoing Messages And Deployment
 
@@ -284,13 +239,13 @@ val reply = createMessage({
 reply.send(SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE);
 ```
 
-Passing a typed body lets `createMessage` choose its envelope inline/ref representation. Passing a cell explicitly selects a referenced whole body. This differs from an inner payload field declared `Cell<T>`; preserve the receiver’s schema:
+Do not convert a typed body to a cell unless the receiving format specifically requires a ref:
 
 ```tolk
-// Typed whole body; automatic envelope placement.
+// Prefer this.
 body: SomeMessage { queryId }
 
-// Explicit referenced whole body, when needed.
+// Use this only when the schema requires a cell body/ref.
 body: SomeMessage { queryId }.toCell()
 ```
 
@@ -324,7 +279,7 @@ dest: {
 }
 ```
 
-Use `UnsafeBodyNoRef` only when direct inline-body encoding is required and the full message is known to fit. Choose send/reserve modes deliberately: fees, remaining inbound value, and remaining contract balance are different sources. Neither a bounce flag nor a successful compute phase proves all asynchronous actions succeeded.
+Use `UnsafeBodyNoRef` only when direct inline-body encoding is required and the body is known to fit.
 
 ## Getters
 
@@ -347,15 +302,14 @@ get fun contractData(): ContractDataReply {
 }
 ```
 
-Getter reply structs make wrappers and off-chain clients easier to audit. Verify the emitted TVM stack shape: `(A,B)` tensors and `[A,B]` tuples are not interchangeable. Naming fields does not authorize changing a standard getter’s method ID or stack order.
+Getter reply structs make wrappers and off-chain clients easier to audit.
 
 ## Maps
 
-Use typed maps instead of low-level dictionary operations in core logic. Keys must have fixed-width serializable encodings; values must be serializable, with refs modeled explicitly:
+Use typed maps instead of low-level dictionary operations in core logic:
 
 ```tolk
 type ReplayMap = map<uint64, bool>
-const ERR_REPLAY = 402
 
 struct Storage {
     processed: ReplayMap = []
@@ -396,13 +350,10 @@ Use auto-serialization first. Reach for manual builders/slices only for:
 
 Common checks:
 
-- A cell has at most 1023 bits and 4 refs. Model a split with `Cell<T>`; the compiler does not split arbitrary storage structs into refs automatically.
-- Optional encodings are schema-specific: generic nullable fields usually add a marker, while `address?` uses the internal-or-none address encoding. An absent trailing field is not automatically a nullable field.
-- Eager `fromSlice`/`fromCell` assert end by default with `assertEndAfterReading`. `slice.loadAny` intentionally reads from the middle and ignores that option; `lazy` also ignores it while reading on demand.
-- When full lazy validation is necessary, use `forceLoadLazyObject().assertEnd()` on the decoded branch. Referenced `Cell<T>` values still need their own decoding when deep validation is required. Validate a used field explicitly if a lazy skip would otherwise avoid checking it. Do not impose eager validation on every partial read.
-- Use `bitsN` for fixed-size binary slices. Built-in `bytesN` is removed in 1.5; casts do not themselves validate N bits/no refs.
-- `PackOptions.skipBitsNValidation` is a trust/performance choice, not a replacement for input validation.
-- Preserve field order, prefix, inline/ref placement, and hashes when adding custom serializers or alias casts. `RemainingBitsAndRefs` must represent an intentional tail, not arbitrary ignored garbage.
+- Serialized structs must fit 1023 bits or split large/infrequent fields into `Cell<T>`.
+- Optional values carry explicit markers; do not use nullable fields to represent absent trailing fields.
+- Eager `fromSlice` asserts end by default; `lazy` reads fields on demand and does not assert end automatically. Disable end assertion only when a remainder is intentionally accepted.
+- Use `bitsN` for fixed-size binary data. Built-in `bytesN` was removed in Tolk 1.5; convert its byte count to bits when migrating.
 
 ## Standard Contract Families
 

@@ -1,76 +1,85 @@
 ---
 name: tolk
-description: "Write, review, debug, and test Tolk smart contracts for TON. Use for .tolk code, typed storage/messages/getters, serialization, message flows, and language or compiler migrations."
+description: "Write, review, debug, and test idiomatic Tolk smart contracts for The Open Network (TON). Use when building or modifying .tolk contracts, designing TON storage/message/getter schemas, implementing internal/external/bounced message flows, using cells, TL-B-compatible serialization, typed maps, Jettons, NFTs, wallets, vesting, multisig, DNS, or choosing Tolk tooling and tests."
 ---
 
 # Tolk
 
-Target: Tolk 1.5.0, reviewed on 2026-10-07 against the official compiler, stdlib, and regression tests at TON revision `ed629c416f7a03cd3838697fcee9f8cd0097700b`. Check the project's actual compiler before applying 1.5-specific syntax or behavior.
+Use this skill to build production-grade Tolk contracts that are typed, auditable, and compatible with TON message and storage conventions.
+
+## Tolk 1.5
+
+Guidance checked against the official Tolk 1.5.0 compiler, stdlib, and regression tests at TON revision `ed629c416f7a03cd3838697fcee9f8cd0097700b`. Check the compiler actually used by the project before applying these changes.
+
+- Built-in `bytesN` types were removed: use `bitsN`, converting bytes to bits (`bytes64` → `bits512`).
+- Prefer `grams(...)` over the deprecated `ton(...)` helper.
+- Alias-owned methods and custom serializers no longer apply automatically to the underlying type.
+- Regular functions cannot use `@pure`; discarded results do not remove explicitly written validating calls.
+- `@inline` supports eligible early returns; `break` and `continue` are supported in loops, with structural restrictions.
+- Read `references/language-and-migration.md` for these changes and the checks needed when upgrading an existing contract.
 
 ## Operating Rules
 
-- Preserve the repository's framework, layout, compiler pin, and validation matrix. Updating a source checkout does not update the compiler used by Acton, Blueprint, or another build tool.
-- Use official TON Docs for concepts and standards: start from `https://docs.ton.org/llms.txt` and load relevant Tolk or contract pages. For version-sensitive semantics, compare the exact compiler/stdlib source and tests at `https://github.com/ton-blockchain/ton/tree/master/tolk` and `https://github.com/ton-blockchain/ton/tree/master/tolk-tester/tests`.
-- Hosted docs may lag a compiler release. In particular, Tolk 1.5 removes built-in `bytesN` and deprecates `ton(...)`; prefer `bitsN` and `grams(...)`.
-- Keep public binary layouts explicit: opcodes, field order, fixed widths, refs, optional markers, getter stack shapes, send modes, and bounce behavior. A compiler upgrade can change code hashes and deployment addresses even when the source schema is unchanged.
-- Prefer typed structs, cells, maps, union dispatch, and `createMessage`. Keep raw cells/slices/dicts and assembler in justified boundaries.
-- Read only relevant references:
-  - [Idiomatic patterns](references/idiomatic-patterns.md) for contract structure, ABI, serialization, and message handling.
-  - [Language and migration](references/language-and-migration.md) for 1.5 alias, purity, loop, inlining, and compiler changes.
-  - [Development checklist](references/development-checklist.md) for tooling, focused validation, and debugging.
+- Prefer the current repository's framework and commands. Detect the project layout before introducing new tooling.
+- Keep binary layouts explicit: field order, fixed integer widths, refs, optional fields, message opcodes, getter return shapes, send modes, and bounce behavior.
+- Prefer Tolk's type system over manual slice/builder work: structs, typed cells, custom serializers, union dispatch, lazy loading, typed maps, and `createMessage`.
+- Keep low-level cell/dict code at clear boundaries. Wrap it immediately in typed aliases, structs, maps, or helper methods.
+- Treat official TON Docs as the source of truth. Start from `https://docs.ton.org/llms.txt`, then load only relevant pages under `https://docs.ton.org/tolk/`, TON foundations, contract development, and standards.
+- Before finishing, report what was built, which docs or standards guided the work, and the exact build/test result or blocker.
 
 ## Workflow
 
 1. Identify the contract surface.
-   - Establish roles, inbound/outbound messages, getters, storage, deployment, fee assumptions, and asynchronous outcomes.
-   - For standard interfaces, check the applicable standard before choosing opcodes or return shapes.
+   - List standards, inbound messages, outgoing messages, getters, storage fields, admin roles, fee assumptions, and deployment behavior.
+   - If implementing a TON standard, open the relevant standard docs before choosing opcodes or getter names.
 
-2. Design schemas and public ABI.
-   - Follow existing file organization; focused `storage.tolk`, `messages.tolk`, and `errors.tolk` are useful when the project needs them.
-   - Use a `contract Name { ... }` directive to expose storage and message families to ABI tooling. Declared getters are exported; helpers do not become ABI serializers automatically.
-   - Model uninitialized/deployed storage variants and payload inline/ref layout explicitly.
+2. Design schemas before behavior.
+   - Put persistent data in `storage.tolk`.
+   - Put message bodies, opcode-prefixed structs, union types, and shared payload types in `messages.tolk`.
+   - Put error constants or enums in `errors.tolk`.
+   - Keep entrypoint files focused on validation, state transitions, sends, and getters.
 
 3. Implement typed entrypoints.
-   - `fun onInternalMessage(in: InMessage)` handles non-bounced internal messages.
-   - Use `lazy AllowedMessage.fromSlice(in.body)` and `match` for opcode families; decide deliberately whether to ignore empty top-ups and reject unknown messages.
-   - `fun onBouncedMessage(in: InMessageBounced)` handles bounce recovery. Choose the parser for the outgoing bounce mode and authenticate/correlate recovery with pending state.
-   - `fun onExternalMessage(inMsg: slice)` handles external requests. Validate shape, signature, expiration, and replay state before `acceptExternalMessage()` when rejection should not charge contract gas. Import `@stdlib/gas-payments` for that primitive.
-   - `InMessage`/`InMessageBounced` are compiler-managed inputs: access fields directly; do not pass/copy the whole input or capture it in a lambda.
+   - Use `fun onInternalMessage(in: InMessage)` for internal non-bounced messages.
+   - Parse known messages as `lazy AllowedMessage.fromSlice(in.body)` and dispatch with `match`.
+   - Choose an explicit unknown-message policy, commonly "ignore empty top-ups, throw `0xFFFF` otherwise".
+   - Use `fun onBouncedMessage(in: InMessageBounced)` when outbound messages can bounce and state must be restored.
+   - Use `fun onExternalMessage(inMsg: slice)` only for external flows, and accept gas only after validation.
 
 4. Implement storage and outgoing actions.
-   - Use named load/save helpers around `contract.getData()` and `contract.setData(...)`.
-   - Use lazy reads for partial access, but validate fields explicitly when correctness requires full decoding. Lazy parsing is not a guarantee of complete payload validation.
-   - Compose typed messages with `createMessage` and choose value, bounce mode, reserve policy, and send flags for the actual flow.
-   - Share `StateInit`/`AutoDeployAddress` construction between address calculation and child deployment.
-   - Treat sends as asynchronous actions: submission, execution, bounces, and application settlement are distinct outcomes.
+   - Use `Storage.load()` and `Storage.save()` helpers around `contract.getData()` and `contract.setData(...)`.
+   - Use `lazy Storage.load()` in getters and read paths.
+   - Compose outgoing messages with `createMessage({ ... })` and send via `.send(SEND_MODE_...)`.
+   - Extract `StateInit` or `AutoDeployAddress` construction into helper methods when a contract deploys another contract.
 
-5. Validate the behavior touched by the change.
-   - Use the project's existing build/test commands, with focused cases for authorization, layout, getters, sends, bounces, fees, or replay invariants that changed.
-   - For compiler or serializer migrations, compare relevant cell hashes/ABI/addresses and behavioral vectors before updating consumers or deploying.
+5. Verify with focused tests.
+   - Cover deployment, accepted messages, rejected messages, getter values, emitted outbound messages, bounces, fee-sensitive paths, replay protection, map iteration, and large payloads.
+   - Use the repository's existing test framework. If multiple frameworks are present, prefer the one already used by adjacent contracts.
 
-## Preferred Patterns
+## Required Patterns
 
-- Opcode-bearing messages use `struct (0x...) Name { ... }`; preserve exact standard opcode widths and values.
-- Known message families use union types and `match`. Generic library unions need not be message opcode unions.
-- Use `Cell<T>` for typed references, `cell` for opaque ones, and `RemainingBitsAndRefs` for a true trailing slice.
-- Serialized numeric fields use `intN`, `uintN`, `coins`, or other schema-defined encodings. `bitsN` holds exactly N bits with no refs; it is not an integer.
-- Use `address` for required internal addresses and `address?` for internal-or-none. Use `any_address` only when broader encodings are intended; an unchecked `as address` cast does not validate an untrusted address.
-- `map<K,V>.get()` returns a result with `isFound`, not a nullable value. Check it before `loadValue()`; keys must be fixed-width and values serializable.
-- Use arrays, tensors, typed tuples, strings, and optional values according to their actual runtime and serialization representation. Do not confuse tuple-backed containers with dictionaries or cell refs.
-- Getter reply structs improve multi-value names; preserve standard getter names, method IDs, stack order, and nested tuple shape.
-- In 1.5, alias-specific methods/serializers do not leak to their underlying type. An alias or cast provides no runtime domain validation; perform it explicitly.
-- Prefer compiler auto-inlining. `@inline`, `break`, and `continue` have structural limits; consult [language and migration](references/language-and-migration.md) when control flow is rejected.
-- Do not use `@pure` on regular functions in 1.5. Explicit calls whose result is unused still preserve validation/throw behavior; `@pure` is not a no-throw guarantee.
+- Use `struct (0x...) MessageName { ... }` for opcode-bearing message bodies.
+- Use `type AllowedMessage = A | B | C` and `match` for known inbound families.
+- Use `Cell<T>` for typed refs and `cell` only when the cell contents are intentionally opaque.
+- Use `RemainingBitsAndRefs` for true remainder payloads.
+- Use fixed-width serializable numeric types (`uint32`, `uint64`, `int32`, `coins`, etc.) inside serialized structs.
+- Use `map<K, V>` and `MapLookupResult.isFound`; do not treat map lookup as nullable value lookup.
+- Use getter reply structs for multi-value responses; preserve standard getter names when a standard defines them.
+- Use methods (`fun Type.method(self)`) to avoid global-name collisions and to keep behavior near the data shape.
+- Avoid assembler functions and micro-optimizations unless a measured constraint requires them.
 
-## Primary Docs
+## References
+
+- Open `references/idiomatic-patterns.md` when implementing or reviewing contract code.
+- Open `references/development-checklist.md` before finalizing a contract change or choosing build/test commands.
+
+Primary docs to consult:
 
 - `https://docs.ton.org/tolk/overview`
 - `https://docs.ton.org/tolk/changelog`
 - `https://docs.ton.org/tolk/idioms-conventions`
 - `https://docs.ton.org/tolk/features/message-handling`
-- `https://docs.ton.org/tolk/features/contract-abi`
 - `https://docs.ton.org/tolk/features/auto-serialization`
-- `https://docs.ton.org/tolk/features/lazy-loading`
 - `https://docs.ton.org/tolk/features/message-sending`
 - `https://docs.ton.org/tolk/features/contract-storage`
 - `https://docs.ton.org/tolk/features/contract-getters`
@@ -79,10 +88,10 @@ Target: Tolk 1.5.0, reviewed on 2026-10-07 against the official compiler, stdlib
 
 ## Completion Gate
 
-Report the result with the actual compiler/toolchain version, relevant validation, and any remaining uncertainty:
+Do not call the task complete until these are true or explicitly blocked:
 
-- Binary layouts and standard interfaces are preserved or intentionally migrated.
-- Authorization, replay, fee, bounce, and deployment behavior relevant to the task are explicit.
-- Raw serialization/assembler boundaries are justified; typed representations cover the rest where appropriate.
-- Required checks passed, or the exact blocker and untested boundary are stated.
-- A local build/emulation does not imply deployment or authorize a network transaction.
+- Storage, messages, getters, and outgoing actions are modeled with typed Tolk constructs where feasible.
+- Any low-level serialization, raw cells, manual refs, or manual dictionaries are localized and justified.
+- Unknown-message, bounce, fee, and deployment behavior are explicit.
+- Standard opcodes/getters/return shapes are checked against relevant TON standard docs when applicable.
+- Build/tests were run with the project's tooling, or the exact blocker is reported.

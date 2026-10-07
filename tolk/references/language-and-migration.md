@@ -102,14 +102,6 @@ fun positiveOrZero(value: int): int {
 
 Inlining does not change a getter's ABI or make a helper a public entrypoint.
 
-## ABI, containers, and advanced stdlib
-
-`contract` declarations expose storage and message families to tooling; `forceAbiExport` can expose additional types without inventing a getter. Verify emitted ABI and wrapper exports, including getter tensors versus nested typed tuples. A plain helper struct is not automatically a client binding.
-
-`array<T>` uses TVM tuples, `(A,B)` is a stack tensor, `[A,B]` is a typed tuple, `map<K,V>` uses a dictionary cell, and `Cell<T>` is a typed ref. These representations are not interchangeable or automatically serializable in every context. Use `string`/`StringBuilder` from `@stdlib/strings` for snake strings, and nullable types/`??` for ordinary optional values.
-
-For reflection, exotic cells, TVM continuations, dictionaries, or unusual opcodes, inspect the matching optional modules (`gas-payments`, `reflection`, `exotic-cells`, `tvm-lowlevel`, `tvm-dicts`) rather than assuming exports from `common`. Prefer narrow helpers over adding low-level machinery to ordinary contract logic.
-
 ## Migration validation
 
 - Pin compiler and stdlib together; a `tolk 1.5` source directive is not a package manager or automatic upgrade.
