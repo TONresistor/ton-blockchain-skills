@@ -19,7 +19,7 @@ Get started with Acton: https://ton-blockchain.github.io/acton
 - [`tolk`](./tolk): Writing, reviewing, debugging, and testing idiomatic Tolk
   smart contracts. Covers typed storage and message schemas, union dispatch,
   auto-serialization, typed maps, explicit bounce and fee behavior, standard
-  getter shapes, and focused contract tests.
+  getter shapes, Tolk 1.5 language migrations, and focused contract tests.
 - [`func2tolk`](./func2tolk): Porting FunC contracts to idiomatic Tolk while
   preserving TL-B layouts, opcodes, error codes, send modes, bounce behavior,
   and observable behavior. Combines `acton func2tolk` with a compatibility and

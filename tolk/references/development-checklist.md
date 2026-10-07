@@ -1,142 +1,87 @@
 # Tolk Development Checklist
 
-Use this before finalizing a Tolk contract implementation, review, or debugging pass.
+Use the relevant parts before finalizing implementation, review, migration, or debugging. Follow the project's validation matrix; this is a checklist of possible checks, not a requirement to run every suite for every edit.
 
-## Table of Contents
+## Docs and version lookup
 
-- Docs lookup
-- Design checklist
-- Implementation checklist
-- Tooling
-- Testing checklist
-- Debugging checklist
-- Run-end audit
+- Start with `https://docs.ton.org/llms.txt`, then fetch only the relevant Tolk/standard pages.
+- Record the actual compiler version and stdlib selected by the build tool. An Acton/Blueprint CLI version is not the Tolk version; a source directive does not install a compiler.
+- For 1.5 behavior, inspect [language and migration](language-and-migration.md) and the matching official compiler/tests. Hosted examples may still mention removed `bytesN` or regular-function `@pure`.
+- Useful topics: `tolk/features/contract-abi`, `auto-serialization`, `lazy-loading`, `message-handling`, `message-sending`, `contract-getters`, and `tolk/types/maps` under `https://docs.ton.org/`.
+- Standard contracts require the applicable public opcodes, layouts, getter names, and stack shapes; an idiomatic-looking example is not proof of standard compatibility.
 
-## Docs Lookup
+## Design checklist
 
-Use official docs first:
+- Roles, authorization, signature domains, seqno/expiration, and replay rules are explicit where relevant.
+- Storage field order, widths, refs, defaults, and uninitialized variants preserve the intended cell layout.
+- Incoming messages have schema-defined prefixes and fields; unknown/empty-message handling is deliberate.
+- The `contract` directive describes the public ABI, including storage/messages and any types explicitly exported for clients.
+- Outgoing messages specify destinations, value source, bounce modes, send flags, and reserve assumptions.
+- Asynchronous success, bounced recovery, retries, and settlement are distinguished from submitting an action.
+- Child deployment uses shared StateInit/address construction and intentional shard/workchain selection.
+- Getter names, method IDs, field order, and tensor/tuple shape match consumers and standards.
 
-```bash
-curl -fsSL https://docs.ton.org/llms.txt
-```
+## Implementation checklist
 
-Search the index for the topic, then fetch only needed pages. Useful pages:
-
-- Tolk overview: `https://docs.ton.org/tolk/overview`
-- Idioms: `https://docs.ton.org/tolk/idioms-conventions`
-- Message handling: `https://docs.ton.org/tolk/features/message-handling`
-- Sending messages: `https://docs.ton.org/tolk/features/message-sending`
-- Contract storage: `https://docs.ton.org/tolk/features/contract-storage`
-- Auto-serialization: `https://docs.ton.org/tolk/features/auto-serialization`
-- Getters: `https://docs.ton.org/tolk/features/contract-getters`
-- Maps: `https://docs.ton.org/tolk/types/maps`
-- Cells: `https://docs.ton.org/tolk/types/cells`
-- Contract examples: `https://docs.ton.org/tolk/examples`
-- Internal messages: `https://docs.ton.org/foundations/messages/internal`
-- Sending modes: `https://docs.ton.org/foundations/messages/modes`
-- Testing: `https://docs.ton.org/contract-dev/testing/overview`
-
-For standard contracts, also open the relevant standard page before writing opcodes, getters, or client-facing return structs.
-
-## Design Checklist
-
-- Contract roles and authority checks are named.
-- Inbound messages have opcode-prefixed structs and fixed-width fields.
-- Outgoing messages have typed bodies and documented send modes.
-- Getter names and return shapes match applicable standards.
-- Storage field order, integer widths, refs, defaults, and optional fields are explicit.
-- Multi-contract deployment helpers return `AutoDeployAddress` or a documented `StateInit`.
-- Bounce policy is chosen for every outgoing message that can affect state.
-- Fee and reserve assumptions are expressed as constants or helper methods.
-- Time, seqno, signature, allowlist, and replay invariants are listed before implementation.
-
-## Implementation Checklist
-
-- Use `errors.tolk`, `messages.tolk`, `storage.tolk`, and entrypoint files unless the project has a stronger existing convention.
-- Use `Storage.load()` / `Storage.save()` helpers.
-- Use `lazy` for storage and message parsing when not all fields are needed.
-- Use `type Allowed... = ...` and `match` for known inbound message families.
-- Keep assertions close to the parsed fields they validate.
-- Use methods to group behavior with data shapes and avoid global symbol collisions.
-- Use typed `map<K, V>` in core logic.
-- Wrap low-level cells, slices, builders, dictionaries, or assembler in small named helpers.
-- Avoid changing public binary layouts by accident when refactoring code.
+- Follow existing module boundaries; introduce separate schemas/helpers only when they improve the actual project.
+- Use named storage load/save helpers and typed messages/maps/cell refs where appropriate.
+- Inspect lazy parsing boundaries: partial decoding does not validate skipped fields or automatically assert end.
+- Use `UnpackOptions.assertEndAfterReading` correctly; eager whole-value decoding and middle-of-slice loads have different semantics.
+- For legacy bounces, recovery fields fit the returned prefix; rich bounces use `RichBounceBody`. Correlate sender/query/pending state before changing balances.
+- External message rejection checks precede acceptance when invalid requests should not charge contract gas. Persist/commit replay state according to the intended action-failure behavior.
+- Keep manual serialization, low-level dictionaries, exotic cells, and asm within justified boundaries.
+- For 1.5 migration, check bytes-to-bits widths, alias-owned serializers/methods, `match` smart casts, purity annotations, and loop/inlining restrictions.
 
 ## Tooling
 
-Prefer the repository's existing commands.
+Prefer repository commands and package scripts. Do not introduce a framework or reinstall a compiler merely to answer a source-level question.
 
-For Acton projects, detect `Acton.toml` and run from the directory that contains it:
+For an Acton project, inspect `Acton.toml`, `acton --version`, and the relevant help. Typical commands, selected according to the change:
 
 ```bash
 acton build
-acton test
-acton test --coverage
-acton wrapper CONTRACT_ID --test
-acton disasm CONTRACT_ID
-acton script scripts/deploy.tolk
+acton test --filter "<relevant-case>"
+acton wrapper <CONTRACT_ID> --test
+acton compile contracts/Main.tolk --source-map build/Main.map.json --boc build/Main.boc --abi build/Main.abi.json
+acton disasm build/Main.boc --source-map build/Main.map.json
 ```
 
-For Blueprint projects, detect `blueprint.config.*`, `wrappers/`, and the project's package manager:
+`disasm` takes a BoC path, inline code, or address; it does not resolve a contract ID. Wrapper generation compiles its own source/interface, so a prior build is not required. In 1.2.1, compile diagnostics may use `errors[]` as well as `error`; record the ABI's `compiler_version` when checking Tolk 1.5.
 
-```bash
-npx blueprint build
-npx blueprint test
-npx blueprint test --coverage
-npx blueprint test --gas-report
-```
+For Blueprint projects, inspect `blueprint.config.*`, wrapper compilation configuration, package scripts, and the installed compiler package. Use the actual test runner; do not assume Acton flags work with Blueprint or that a package named `tolk-js` has the latest language release.
 
-Use existing package scripts when present:
+- `npx blueprint build` is a usual project build entrypoint; confirm its help/version.
+- Use existing `npm`, `yarn`, `pnpm`, or `bun` scripts for tests/coverage/gas when configured, rather than inventing test flags.
+- Source-only migration examples can be compiled in an isolated directory with the exact compiler. Do not modify the user's global toolchain to do so.
 
-```bash
-npm test
-yarn test
-pnpm test
-bun test
-```
+Scripts without `--net` emulate locally in Acton. Network submissions, source-verification payments, and deployments require the user's authorization for that target. Local validation does not grant it.
 
-Do not broadcast deployment transactions unless the user explicitly asks for a real network action and the local dry run succeeds.
+## Focused testing checklist
 
-## Testing Checklist
+Cover the behavior touched by the change, selecting relevant scenarios:
 
-Cover at least the behavior touched by the change:
+- Deployment, initial storage, uninitialized variants, and deterministic addresses.
+- Accepted/unknown/empty messages, malformed or truncated payloads, unexpected refs, authorization, and expected exit codes.
+- Getters, exact field/stack order, and client decoding.
+- Outgoing destination, opcode, value, inline/ref placement, bounce mode, send/reserve flags, and action failure.
+- Bounce repair, sender/pending-query correlation, duplicate recovery, and out-of-order asynchronous responses.
+- Signature payload hashes, destination/domain binding, seqno/replay state, and expiration boundaries.
+- Cell bit/ref limits, variable payloads, remainder tails, and custom serializers.
+- Map insertion/deletion/lookup/iteration boundaries; iterator progress before `continue`.
+- Compiler upgrades: alias serializer vectors, discarded validating calls, supported early returns/loop guards, ABI, code hashes, and deployment-address changes.
 
-- deployment and initial storage;
-- empty top-up messages;
-- each accepted inbound message;
-- unknown non-empty inbound messages;
-- unauthorized senders;
-- invalid values and expected exit codes;
-- getter return values and field order;
-- outgoing message destination, body opcode, value, bounce mode, and send mode;
-- bounced-message state repair;
-- fee-sensitive branches and remaining-balance handling;
-- replay protection, seqno, signatures, expiration, or query maps;
-- large payloads, remainder payloads, and typed refs;
-- map insertion, deletion, lookup, and iteration boundaries;
-- multi-contract address calculation and deployment state.
+Use fresh emulator state or an explicit scenario baseline. Pin time/random seed/fork block when determinism matters; local/latest-fork execution may start from wall-clock time. Report emulation measurements as local evidence, not a production gas guarantee.
 
-For local blockchain emulators, keep each test isolated with fresh chain state unless the framework intentionally models a scenario across steps.
+## Debugging checklist
 
-## Debugging Checklist
+- Read the compiler's primary and related source locations. For rejected `@inline`/`continue`, simplify the identified branch shape before changing the public API.
+- Compare message opcode and actual cell tree, including refs/optional markers, before assuming business logic is wrong.
+- Check eager versus lazy decoding, retained validation calls, and alias serializer selection against the exact compiler.
+- Inspect emitted ABI/getter stack order and the actual wrapper exports.
+- Verify envelope body placement and bounce-parser alignment; a payload beginning with `0xffffffff` is not by itself a bounced message.
+- Check fee/reserve/send-mode effects and actual transaction/action outcomes.
+- Use disassembly or a focused runtime reproducer when an optimization, exception, or gas claim cannot be established from source alone.
 
-When behavior diverges:
+## Run-end report
 
-- Compare message body structure and opcode first.
-- Inspect storage serialization by dumping cell trees or comparing field order.
-- Confirm `createMessage` body inline/ref behavior; use `UnsafeBodyNoRef` only when required.
-- Confirm bounce mode and bounced body parser are aligned.
-- Confirm getter return stack order and names.
-- Confirm map key/value types are fixed-width and serializable.
-- Confirm `fromSlice` end assertion behavior when payloads carry remainders.
-- Disassemble compiled output when source-level reasoning is insufficient.
-
-## Run-End Audit
-
-Before final response, report:
-
-- docs and standards consulted;
-- files changed;
-- build/test commands run and results;
-- any low-level serialization or raw data exceptions;
-- any unverified behavior or blocker.
+State what changed or was established, the relevant compiler/toolchain version, checks and results, and any remaining unverified boundary. Keep local compilation, emulator behavior, network execution, and source verification separate.
