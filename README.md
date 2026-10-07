@@ -13,8 +13,9 @@ Get started with Acton: https://ton-blockchain.github.io/acton
 
 - [`acton`](./acton): Acton CLI workflows for installation and updates, project
   creation, `Acton.toml` configuration, builds, single-file compilation,
-  wrapper generation, tests, scripts, wallets, verification, RPC inspection,
-  libraries, linting, formatting, hooks, IDE support, and troubleshooting.
+  wrapper generation and dApps, tests, scripts, wallets, verification, RPC
+  inspection, Simulator, Docker Localnet, Studio, libraries, linting,
+  formatting, hooks, IDE support, and troubleshooting.
 - [`tolk`](./tolk): Writing, reviewing, debugging, and testing idiomatic Tolk
   smart contracts. Covers typed storage and message schemas, union dispatch,
   auto-serialization, typed maps, explicit bounce and fee behavior, standard

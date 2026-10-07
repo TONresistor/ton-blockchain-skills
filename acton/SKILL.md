@@ -1,236 +1,136 @@
 ---
 name: acton
-description: "Acton CLI workflow for TON smart contract development in Tolk: install/update, project bootstrap, Acton.toml configuration, build/compile/wrapper generation, tests with coverage/gas/fuzz/mutation/UI, scripts and deployment, wallets, verification, RPC inspection, libraries, lint/format/hooks, LSP/completions, and troubleshooting."
+description: "Develop and inspect TON projects with Acton CLI. Use for Acton commands, manifests, builds, wrappers, tests, scripts, wallets, verification, and local development environments."
 ---
 
 # Acton TON CLI Workflow
 
+This guidance targets Acton 1.2.1, reviewed against its source and command manuals on 2026-10-07. Features introduced in 1.2.1 are marked below; older installations may not support them.
+
 ## Source of truth
 
-- Prefer the exact installed binary for command spelling and behavior:
-  - `acton --version`
-  - `acton --help`
-  - `acton help <command>`
-  - `acton <command> --help`
-- Use official hosted docs for current concepts, tutorials, and full reference:
+- Record `acton --version` and inspect `acton <command> --help` for accepted syntax; `acton help <command>` provides the detailed manual.
+- Prefer the installed binary for local execution. Hosted docs and trunk source may describe a newer version; identify the version difference before choosing flags or updating the tool.
+- Official documentation:
   - `https://ton-blockchain.github.io/acton/docs/welcome/`
-  - `https://ton-blockchain.github.io/acton/docs/commands/`
+  - `https://ton-blockchain.github.io/acton/docs/commands/overview`
   - `https://ton-blockchain.github.io/acton/llms-full.txt`
-- Use the official examples repo for real project patterns and reference contracts:
-  - `https://github.com/ton-blockchain/acton-contracts`
-- Read bundled references only when needed:
-  - `references/command-map.md` for fast command selection
-  - `references/troubleshooting.md` for common failure modes
-- Do not assume local paths, private checkouts, or a specific developer machine.
-- Use GitHub source only when the user explicitly asks to inspect upstream implementation. Treat `acton-contracts` as examples of project structure and contract patterns, not as the source of truth for CLI flags.
-- If docs and the installed CLI disagree, state the Acton version and follow the installed CLI for that local workflow. If the user wants latest behavior, suggest `acton up` or the install/update flow first.
-
-## First-release exclusions
-
-- Do not recommend `acton localnet` or `--net localnet`. That feature may remain visible in source or trunk help, but it is excluded from the first release and should be treated as unavailable in public workflows.
+- Use `https://github.com/ton-blockchain/acton-contracts` for project and contract examples, not CLI flag definitions. For implementation questions, inspect source matching the relevant Acton version.
+- Read only the references relevant to the task:
+  - [Command map](references/command-map.md): command selection and useful options.
+  - [Environments](references/environments.md): Simulator, Docker Localnet, Studio, client endpoints, and snapshots.
+  - [Wrappers and dApps](references/wrappers-and-dapps.md): ABI exposure, precompiled contracts, output settings, and frontend integration.
+  - [Troubleshooting](references/troubleshooting.md): diagnosis of command, build, test, wallet, and network failures.
 
 ## Install or update Acton
 
-If `acton` is missing and the task requires running it, install the public binary:
+When the task requires Acton and it is missing:
 
 ```bash
 curl -LsSf https://github.com/ton-blockchain/acton/releases/latest/download/acton-installer.sh | sh
 ```
 
-Then open a fresh shell or reload the updated shell profile if needed, and verify:
+Open a fresh shell or reload the updated shell profile, then verify `acton --version`.
 
-```bash
-acton --version
-acton --help
-```
-
-Update and version management:
-
-- `acton up` installs the latest stable release.
-- `acton up --list` lists available versions.
-- `acton up <version>` installs a specific version.
-- `acton up --trunk` installs the latest trunk build when supported by the installed CLI.
-- In CI, prefer `ton-blockchain/setup-acton@master` or the published `ghcr.io/ton-blockchain/acton:<version>` image.
+- `acton up` installs the latest stable release; `--list` lists versions, a positional version selects one, and `--trunk` selects a trunk build.
+- Updating a source checkout does not update the installed executable. Check `command -v acton` when multiple installations are possible.
+- Versioned macOS and Linux GNU releases are supported; on Windows, use WSL and run Git and Acton in the same distribution.
+- In CI, use the project's pinned version with `ton-blockchain/setup-acton@master` or `ghcr.io/ton-blockchain/acton:<version>`.
 
 ## First checks in any project
 
-1. Confirm tool and project context:
-   - `acton --version`
-   - `acton doctor`
-   - `pwd`
-2. If running from outside the project, select context explicitly:
+1. Inspect the project layout, `Acton.toml`, existing scripts, and validation requirements. Use `acton doctor` for resolved paths, stdlib, overlays, and network diagnostics when needed.
+2. Select project context explicitly when outside the project:
    - `acton --project-root <PATH> ...`
    - `acton --manifest-path <PATH>/Acton.toml ...`
-3. Inspect the relevant command help before relying on memory:
-   - `acton help build`
-   - `acton help test`
-   - `acton help script`
-4. Inspect `Acton.toml` for the sections that matter:
-   - `[package]`
-   - `[contracts]`
-   - `[build]`
-   - `[wrappers.tolk]`
-   - `[wrappers.typescript]`
-   - `[fmt]`
-   - `[test]`
-   - `[lint]`
-   - `[networks]`
-   - `[scripts]`
-   - `[import-mappings]`
+3. Inspect only relevant manifest sections: `[package]`, `[toolchain]`, `[contracts]`, `[build]`, `[wrappers.*]`, `[test]`, `[fmt]`, `[lint]`, `[networks]`, `[localnet]`, `[scripts]`, and `[import-mappings]`. Wallet and library overlays may also come from separate local/global TOML files.
 
-Project-root rule: config-relative paths are resolved from the project root. Relative CLI path flags are resolved from the current working directory unless passed as absolute paths.
+`--project-root` and `--manifest-path` are mutually exclusive. Config-relative paths use the resolved project root; ordinary CLI input/output paths usually use the current directory. Some options, such as mutation rule files, are explicitly project-relative: inspect their help rather than applying one path rule to every flag. `--manifest-path` selects the manifest without changing project-root resolution.
 
 ## Project bootstrap
 
-- Use `acton new [path] --template empty|counter|jetton|nft` for a fresh project.
-- Useful `acton new` flags:
-  - `--name`, `--description`, `--license`
-  - `--app` for the TypeScript/Vite app scaffold when the template supports it
-  - `--hooks` for default project Git hooks
-  - `--agents` for generated coding-agent guidance
-- Use `acton init` to add Acton support to an existing directory.
-- Useful `acton init` modes:
-  - `acton init --create-app [path]` creates only the TypeScript app scaffold
-  - `acton init --stdlib-only` refreshes only the bundled standard library
-- `acton init` can patch default `[import-mappings]` into an existing manifest, but that rewrite may drop TOML comments and unknown keys.
+- `acton new <path> --template empty|counter|jetton|nft|w5-extension` creates a project. Use `.` for the current directory.
+- All built-in templates support `--app` for a React/Vite TypeScript dApp. Preserve an existing project's layout when adding Acton.
+- `--name`, `--description`, `--license`, and `--agents` configure the scaffold. `--overwrite` replaces colliding files; inspect collisions before using it.
+- `--hooks` creates and installs the default pre-push hook. Use `--hooks=pre-commit` to select pre-commit; an explicit hook value requires `=`.
+- `acton init` creates a missing manifest, discovers contract sources, patches `.gitignore`, refreshes stdlib, and attempts wallet/library overlay symlinks. An existing `Acton.toml` is left untouched; repair its mappings explicitly.
+- `acton init --create-dapp [path]` creates only the app scaffold, defaulting to `app`. It fails if the destination exists.
+- `acton init --stdlib-only` re-extracts stdlib even outside an initialized project, without touching the manifest or overlays.
 
 ## Build, compile, and wrappers
 
-- `acton build [contract-name]`
-  - Builds all contracts, or one contract plus transitive dependencies.
-  - Common flags: `--clear-cache`, `--graph <path>`, `--out-dir <dir>`, `--gen-dir <dir>`, `--output-fift <dir>`, `--info`.
-- `acton compile <file.tolk>`
-  - Single-file compiler entrypoint.
-  - Common flags: `--json`, `--base64-only`, `--boc <file>`, `--fift <file>`, `--source-map <file>`, `--abi <file>`, `--allow-no-entrypoint`, `--clear-cache`.
-- `acton wrapper <contract-name>`
-  - Generates Tolk wrappers from contract ABI.
-  - Use `--test`, `--test-output`, or `--test-output-dir` for test stubs.
-  - Use `--ts` for TypeScript wrappers via `gen-typescript-from-tolk`.
-  - Do not combine `--ts` with test-stub generation.
-- If ABI, storage, or message types changed, regenerate wrappers instead of hand-editing generated files.
-- Wrapper output defaults come from `[wrappers.tolk]`, `[wrappers.typescript]`, and the `@wrappers` import mapping.
+- `acton build [contract-name]` builds all configured contracts or one plus transitive dependencies. Build settings can export ABI, BoC, Fift, and source bundles.
+- `acton compile <file.tolk>` compiles one explicit source, without traversing the dependency graph. Use `--allow-no-entrypoint` for helper files; `--source-map`, `--abi`, `--boc`, and `--fift` export artifacts.
+- In 1.2.1, `compile --json` reports source diagnostics in `errors[]`, with optional ranges, function context, and related locations. Input/configuration/fatal failures use `error`; consumers must handle both shapes.
+- `acton wrapper <contract-name>` generates Tolk wrappers; `--ts` generates TypeScript through `npx @ton/tolk-abi-to-typescript@0.5.0`. Node.js/npm/npx are required for this mode.
+- Use `--test` to generate a test stub. `--test-output` and `--test-output-dir` require `--test`; TypeScript mode conflicts with all test-stub options.
+- `acton wrapper --all` processes configured contracts. A prior build is not required: wrapper generation compiles source or a configured ABI interface directly.
+- Regenerate after ABI changes or upgrades that affect generated names. Read [wrappers and dApps](references/wrappers-and-dapps.md) before changing serialization, using `.boc` contracts, or integrating generated code into a frontend.
 
 ## Tests and quality gates
 
-- Core entrypoint: `acton test [path]`.
-- Common test flags:
-  - `--filter <regex>`, `--include <glob>`, `--exclude <glob>`
-  - `--fail-fast`
-  - `--fuzz-seed <seed>`
-  - `--verbose` for low-level executor logs
-  - `--debug --debug-port <port>`
-  - `--backtrace full`
-  - `--reporter console|dot|teamcity|junit` or comma-separated combinations
-  - `--junit-path <dir>`, `--junit-merge`
-  - `--show-bodies`
-  - `--clear-cache`
-- Coverage:
-  - `acton test --coverage --coverage-format lcov`
-  - `acton test --coverage --coverage-format text`
-  - `--coverage-file <path>`
-  - `--coverage-minimum-percent <percent>`
-  - `--coverage-include-wrappers`
-  - `--coverage-include-tests`
-- Gas profiling:
-  - `acton test --snapshot build/gas-baseline.json`
-  - `acton test --baseline-snapshot build/gas-baseline.json`
-  - `acton test --baseline-snapshot build/gas-baseline.json --fail-on-diff`
-- Mutation testing:
-  - `acton test --mutate --mutate-contract <contract-name>`
-  - `--mutation-diff worktree|ref|branch`
-  - `--mutation-diff-ref <ref>`
-  - `--mutation-levels critical,major,minor`
-  - `--mutation-disable-rules <rule>`
-  - `--mutation-rules-file <path>`
-  - `--mutation-session-id <id>`
-  - `--mutation-id <id>`
-  - `--mutation-workers <n>`
-  - `--mutation-minimum-percent <percent>`
-- Fork tests:
-  - `acton test --fork-net testnet|mainnet|custom:<name>`
-  - `acton test --fork-net testnet --fork-block-number <seqno>`
-- Test UI and traces:
-  - `acton test --ui`
-  - `acton test --ui --ui-port <port>`
-  - `acton test --save-test-trace`
-  - `acton test --save-test-trace <dir>`
-- Defaults live in `[test]`, `[test.coverage]`, `[test.fuzz]`, and `[test.mutation]`. CLI flags override config for the current run.
+- `acton test [paths...]` runs emulator tests. `--filter`, `--include`, `--exclude`, and `--fail-fast` narrow execution; `--fuzz-seed` makes fuzz inputs reproducible.
+- Local tests/scripts start from current wall-clock time. A fork pinned with `--fork-block-number` uses that block's time; latest forks use current time. Set `testing.setNow(...)` when the test requires a fixed clock.
+- `--fork-net <network>` resolves remote accounts while execution stays local. It does not turn tests into transactions on a running Simulator or Localnet. `--no-fork-cache` bypasses the persistent cache for pinned forks.
+- Use `--debug`, `--debug-port`, `--backtrace full`, or `--verbose` for diagnosis. `--no-capture` streams captured test output and conflicts with mutation mode.
+- Reporters include `console`, `dot`, `teamcity`, and `junit`; combine them with commas. Use `--junit-path` and `--junit-merge` for CI output.
+- Coverage: `--coverage`, `--coverage-format lcov|text`, `--coverage-file`, `--coverage-minimum-percent`, and optional inclusion of wrappers/tests.
+- Gas regressions: create `--snapshot <file>`, then compare with `--baseline-snapshot <file>` and optionally `--fail-on-diff`.
+- Source-level gas profiles: `--gas-profile <file>`, `--gas-profile-format cpuprofile|collapsed`, and `--gas-profile-include-tests`. These identify hot paths rather than enforce a snapshot baseline.
+- Mutation: `--mutate --mutate-contract <name>`, optionally scoped by diff, rule levels, or IDs. Preserve the printed session ID and filters when resuming.
+- In 1.2.1, `--mutation-timeout <seconds>` / `[test.mutation].timeout` defaults to 60 seconds per mutant, including compilation. Timed-out mutants are excluded from the score; remaining mutants continue and the final exit status is 1.
+- In 1.2.1, `toHaveFailedTx` accepts an `exitCode` predicate; the matcher still requires a failed transaction.
+- `--ui` serves test results and opens a browser; `--save-test-trace [dir]` saves offline bundles. `--no-studio-reporting` disables reporting to a running Studio instance without changing test execution.
+- Defaults come from `[test]`, `[test.coverage]`, `[test.fuzz]`, and `[test.mutation]`; CLI flags override them for that invocation.
+
+Follow the repository's validation matrix. Common CI commands are `acton build`, `acton test --reporter console,junit`, `acton check --output-format github`, and `acton fmt --check`; select the checks relevant to the change.
 
 ## Linting, formatting, and hooks
 
-- `acton check [target]`
-  - Checks a project, contract name, or `.tolk` file.
-  - Common flags: `--fix`, `--output-format plain|json|sarif|github|gitlab`, `--output-file <path>`, `--enable-only <code[,code...]>`, `--explain <rule>`.
-- Lint config lives in `[lint]`, `[lint.rules]`, and `[lint.rules.<contract-name>]`.
-- Inline suppressions use `// check-disable-next-line ...`.
-- `acton fmt [paths...]`
-  - Formats sources.
-  - Use `acton fmt --check` in CI.
-  - Defaults live in `[fmt]`.
-- `acton hooks new|install|status|uninstall`
-  - Manages project-local Git hooks under `.githooks`.
-- Typical CI gates:
-  - `acton build`
-  - `acton test --reporter console,junit`
-  - `acton check --output-format github`
-  - `acton fmt --check`
+- `acton check [target]` checks the project, a contract ID, or a `.tolk` path. Configure `[lint]`, `[lint.rules]`, and per-contract overrides.
+- `--fix` rewrites only safe linter fixes in plain mode. `--output-file` requires a non-plain format; output formats include `json`, `sarif`, `github`, and `gitlab`.
+- `--enable-only <codes>` selects rules; `--explain <rule>` describes one. Inline `// check-disable-next-line <rule-name>` uses names, not codes, and cannot suppress compiler/parser diagnostics.
+- `acton fmt [paths...]` formats sources; `--check` validates formatting. `--stdin`, `--stdin-filepath`, and `--range` support editor integration; ranges use zero-based positions and UTF-8 byte columns.
+- `acton hooks new|install|status|uninstall` manages `.githooks`. The default hook runs `check` and `fmt --check` on the working tree, not an isolated copy of staged or pushed revisions. Preserve existing hook configuration.
 
 ## Scripts, deployment, and network reads
 
-- `acton script <path> [args...]` runs a standalone Tolk script.
-- There is no `acton deploy` command. Deployment is script-driven.
-- Safe execution sequence for state-changing scripts:
-  1. `acton build`
-  2. `acton test`
-  3. `acton script <path>` to emulate locally
-  4. `acton script <path> --net testnet`
-  5. only after testnet validation, `acton script <path> --net mainnet`
-- `--net <network>` broadcasts real transactions to `testnet`, `mainnet`, or `custom:<name>`. If `--net` is omitted, execution stays local.
-- `--fork-net <network>` reads remote state while executing locally. When `--net` is set, omitted `--fork-net` defaults to the selected network for reads.
-- Common script flags: `--debug`, `--debug-port`, `--backtrace full`, `--verbose`, `--clear-cache`, `--fork-net`, `--fork-block-number`, `--net`, `--explorer tonscan|toncx|dton|tonviewer`, `--show-bodies`.
-- `acton run <script-name> [args...]` runs entries from `[scripts]` in `Acton.toml`.
-- Script arguments are parsed against `main()` ABI. Use `--` before forwarded args that look like Acton flags.
-- Built-in network API keys are environment variables, usually loaded from `.env`:
-  - `TONCENTER_TESTNET_API_KEY`
-  - `TONCENTER_MAINNET_API_KEY`
-  - `<NORMALIZED_NAME>_API_KEY` for `custom:<name>`
+- `acton script <path> [args...]` executes a standalone Tolk script. Deployment is script-driven; there is no `acton deploy`.
+- Without `--net`, scripts emulate locally. `--fork-net` reads remote state without broadcasting.
+- With `--net testnet|mainnet|localnet|custom:<name>`, scripts submit transactions to that network. Omitted `--fork-net` defaults to it for reads; explicit fork and broadcast networks must match.
+- Network selection and `--fork-block-number` control the emulation context; they do not prove a transaction was accepted. After broadcasting, inspect `waitForFirstTransaction()` or `waitForTrace()`. `ExternalSendResult.isAccepted()` cannot establish acceptance from submission alone; check `acceptanceKnown`.
+- `--tonconnect` uses native QR/deep-link wallet approval for mainnet/testnet broadcasting. It requires `--net`; no browser bridge or `--tonconnect-port` is needed.
+- `--explorer` accepts `actonscan` (default), `tonscan`, `toncx`, `dton`, or `tonviewer`.
+- `acton run <script-name> [args...]` executes a manifest `[scripts]` entry. Script arguments use `main()` ABI; use `--` before arguments resembling Acton flags.
+- Validate changes locally and use testnet before a new mainnet deployment. Match validation to the change and the user's authorized scope; running a local example does not authorize a public-network transaction.
+- Acton loads `.env` during project work. Built-in keys are `TONCENTER_TESTNET_API_KEY`, `TONCENTER_MAINNET_API_KEY`, and `<NORMALIZED_NAME>_API_KEY` for custom networks (uppercase, non-alphanumeric characters replaced by `_`).
+
+## Development environments
+
+Available since 1.2:
+
+- Simulator: deterministic local chain execution, public-state forks, virtual time, manual mining, snapshots, and configurable API conditions; no validators or consensus.
+- Localnet: real validators and TON Center services in Docker; use for elections, synchronization, and full-node/indexer behavior.
+- Studio: browser workspace for tests, traces, contracts, wallets, and environment management. `--no-open` suppresses browser opening, but still starts the server.
+
+Read [environments](references/environments.md) to select endpoints and lifecycle commands. Starting a server, opening a browser, or creating a Docker network must fit the requested task and session permissions.
 
 ## Wallets, verification, and inspection
 
-- Wallets:
-  - `acton wallet new`
-  - `acton wallet import`
-  - `acton wallet list`
-  - `acton wallet export-mnemonic`
-  - `acton wallet sign`
-  - `acton wallet remove`
-  - `acton wallet airdrop`
-- Prefer secure keyring storage when available. Use `mnemonic-env` for CI and never commit plaintext wallet files or mnemonics.
-- Verification:
-  - `acton verify [contract-name] --address <addr> --net testnet|mainnet`
-  - Useful flags: `--wallet <name>`, `--compiler-version <version>`, `--dry-run`.
-- RPC inspection:
-  - `acton rpc info <address>`
-  - `acton rpc block`
-  - `acton rpc block-number`
-  - `acton rpc trace <hash>`
-- On-chain libraries:
-  - `acton library publish`
-  - `acton library fetch`
-  - `acton library info`
-  - `acton library topup`
-- Low-level tools:
-  - `acton disasm [boc-file]`
-  - `acton retrace <tx-hash>`
-  - `acton doc tvm <query...>`
-  - `acton func2tolk <path>`
-  - `acton ls --stdio` or `acton ls --port <port>`
-  - `acton completions bash|elvish|fish|powershell|zsh|nushell`
+- `acton wallet new|import|list|export-mnemonic|sign|remove|airdrop` manages local/global wallet overlays. Local names override global ones; use keyring storage when available or `mnemonic-env` for CI.
+- In 1.2.1, TG Wallet rev00 is supported, with `mnemonic-scheme = "ton"|"bip39"|"rotation"`. Import with `--mnemonic-scheme` or interactive selection; TON remains the default independently of word count. BIP39 accepts 12 or 24 words.
+- In 1.2.1, explicit `wallet-id` applies on every network; omitting it keeps version/network defaults. Workchain values must fit i8. For V5 on a custom mainnet endpoint, configure `networks.<name>.global-id = -239` (custom default: `-3`).
+- `wallet sign --body <BoC>` signs an external body supplied as hex/base64 or stdin; it does not broadcast. In 1.2.1 its JSON output no longer includes the redundant `input` encoding field; signed bodies remain hex.
+- `acton verify [contract-name] [--address <addr>]` compiles and publishes Tolk sources through the ticket-based verifier with a testnet payment. The CLI has no `--net` flag. Already verified code needs no new payment.
+- Use `verify --dry-run` to prepare without payment/upload. `--payment-tx-hash` reuses a finalized testnet payment bound to the same code hash; it conflicts with `--wallet`, `--tonconnect`, and `--dry-run`. In 1.2.1 the default compiler version is the bundled Tolk version.
+- `acton rpc info`, `rpc call`, `rpc block`, `rpc block-number`, and `rpc trace` inspect network state. ABI can come from the project, catalog, verifier, or explicit JSON/Tolk input. `acton doc abi <contract-or-code-hash>` prints ABI JSON.
+- `acton library publish|fetch|info|topup` manages on-chain code libraries and local/global metadata. `publish`/`topup` can spend funds; `fetch` and `info` are inspection paths. Regular accounts cannot directly perform change-library publication on public networks.
+- Low-level tools include `disasm`, `retrace`, `doc tvm`, `func2tolk`, and `ls`. Dynamic completions use `COMPLETE=<shell> acton`; `acton completions <shell>` emits a static script.
 
 ## Safety and correctness rules
 
-- Warn once before `acton script --net mainnet`, `acton verify`, `acton library publish`, or `acton library topup`.
-- State wallet, network, project-root, and Acton version assumptions explicitly when they affect the result.
-- Do not invent commands or flags. Verify with `acton help <command>` when unsure.
-- Do not use old examples with `acton litenode`, `[mappings]`, `--broadcast`, `--api-key`, or `acton up --canary` unless the user's installed binary explicitly supports them.
-- Use TON docs for blockchain concepts that Acton docs do not cover; use Acton docs for CLI behavior.
+- Before broadcasting, paying for verification, or publishing/topping up a library, establish the wallet, destination, network, and existing user authorization. Stop if those assumptions cannot be verified.
+- Never put mnemonics, keyring secrets, or private API/control tokens in shared output or committed files.
+- Keep emulation, submission, execution evidence, and source verification distinct when reporting results.
+- Avoid stale spellings such as `init --create-app`, `litenode`, `[mappings]`, `--broadcast`, `--api-key`, or `up --canary` unless the installed version supports them.
+- Use TON docs for blockchain concepts outside Acton's CLI/tooling scope. Acton 1.2 uses GRAM/nanogram terminology; old TON aliases remain supported. Inspect the relevant stdlib docs when migrating APIs such as random-byte generation.
